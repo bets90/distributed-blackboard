@@ -1,0 +1,161 @@
+# -- coding: utf-8 -- 
+# function to get the right neighbor's IP address
+def getNeighborIP(myIP):
+  for vessel in mycontext['vessels']:
+    if myIP == vessel:
+      if mycontext['vessels'].index(myIP)+1 <= len(mycontext['vessels'])-1:
+        return mycontext['vessels'][mycontext['vessels'].index(myIP)+1]
+      else:
+        return mycontext['vessels'][0]
+
+# Compare ID with temporary leader
+def compareID(send_message,initiator,myID,leaderID,myIP,leaderIP):
+  if int(myID) > int(leaderID):
+    return_message=initiator+';'+myIP+';'+str(myID)
+    return return_message
+  elif int(myID) < int(leaderID):
+    return_message=send_message
+    return return_message
+
+# send message function
+def sendMessage(ip,message):
+  mycontext['stoplock'].acquire()
+  try:
+    socketobject = openconn(ip,mycontext['port'],timeout=10)
+    socketobject.send(message)
+    socketobject.close()
+  except:
+    print 'Exception!'
+  mycontext['stoplock'].release()
+
+# initiate leader election
+def initiateElection():
+  mycontext['myip']=getmyip()
+  neighborIP=getNeighborIP(mycontext['myip'])
+  mycontext['stoplock'].acquire()
+  send_message='Initiator:'+mycontext['myip']+';'+mycontext['myip']+';'+str(mycontext['myid'])
+  mycontext['stoplock'].release()
+  sendMessage(neighborIP,send_message)
+
+# propagate the leader's ip and ID
+def propagateLeader():
+  mycontext['myip']=getmyip()
+  neighborIP=getNeighborIP(mycontext['myip'])
+  mycontext['stoplock'].acquire()
+  send_message="Leader:%s,%s"%(mycontext['leader_ip'],mycontext['leader_id'])
+  mycontext['stoplock'].release()
+  sendMessage(neighborIP,send_message)
+
+# response html to browser
+def htmlResponse(sockobj,content):
+  mycontext['stoplock'].acquire()
+  htmlresponse = """<html><head><meta content="text/html; charset=utf-8" http-equiv="content-type"><title>Blackboard GroupName</title></head><body><h2> Board Content</h2><p>Board board board board</p><h2>Leader IP :"""+str(mycontext['leader_ip'])+"""</h2><h2>Leader ID :"""+str(mycontext['leader_id'])+"""</h2><h2>"""+content+"""</h2><br><h3>Submit to board<h3><textarea rows="4" cols="50" name="comment" form="usrform"></textarea><form action="" id="usrform" method="post"><input type="submit"></form></body></html>"""
+  sockobj.send("HTTP/1.1 200 OK\r\nContent-type: text/html\r\n" + \
+  "Content-length: %i\r\n\r\n%s" % (len(htmlresponse), htmlresponse))
+  mycontext['stoplock'].release()
+
+def board(ip, port, sockobj, thiscommhandle, listencommhandle):
+  try:
+    msgheader = sockobj.recv(1024) # Receive message,
+  except:
+    print 'Recv Exception!'
+  # React depending on message type: HTTP GET or POST, or some other type of communication.
+  # GET type, the vessel returns html to browser
+  if msgheader.startswith( 'GET' ):
+    htmlResponse(sockobj,str(mycontext['print_string']))
+    stopcomm(thiscommhandle)
+
+  # POST type, the vessel sends the submitted message to all the vessels
+  elif msgheader.startswith( 'POST' ):
+    send_message=msgheader[msgheader.find('comment')+8:]
+    htmlResponse(sockobj,mycontext['print_string'])
+    stopcomm(thiscommhandle)
+    # send message to the leader
+    sendMessage(mycontext['leader_ip'],send_message)
+
+  # Receive message from vessels's left neighbor
+  elif msgheader.startswith( 'Initiator' ):
+    send_message=msgheader
+    stopcomm(thiscommhandle)
+
+    # one round of leader election is over eg. Initiator:ip address == mycontext['myip']
+    if send_message.split(';')[0].split(':')[1] == mycontext['myip']:
+      mycontext['leader_ip']=send_message.split(';')[1]
+      mycontext['leader_id']=send_message.split(';')[2]
+      # propagate leader's information to right neighbor
+      if mycontext['leader_ip'] is not None:
+        propagateLeader()
+    else:
+      mycontext['myip']=getmyip()
+      neighborIP=getNeighborIP(mycontext['myip'])
+      # Compare vessel's ID with temporary leader's ID, then send message with higher ID to vessel's right neighbor
+      send_message=compareID(send_message,send_message.split(';')[0],mycontext['myid'],send_message.split(';')[2],mycontext['myip'],send_message.split(';')[1])
+      sendMessage(neighborIP,send_message)
+  
+  # Receive message from left neighbor who has got the leader. It's used to make sure that every vessel has the same leader
+  elif msgheader.startswith('Leader'):
+    send_message=msgheader
+    stopcomm(thiscommhandle)
+    leader_ip=send_message.split(':')[1].split(',')[0]
+    leader_id=send_message.split(':')[1].split(',')[1]
+    mycontext['stoplock'].acquire()
+    mycontext['leader_ip']=leader_ip
+    mycontext['leader_id']=leader_id
+    mycontext['stoplock'].release()
+    myip=mycontext['myip']
+
+  # Other Connection, when the vessel receives message from vessels through tcp connection ,it will add this message to its global value
+  else:
+    send_message=msgheader
+    stopcomm(thiscommhandle)
+  #This section of code runs for the leader
+    if mycontext['myip'] == mycontext['leader_ip']:
+      mycontext['stoplock'].acquire()
+      vessels=mycontext['vessels']
+      # Remove leader's ip from vessel list
+      if mycontext['leader_ip'] in vessels:
+        vessels.remove(mycontext['leader_ip'])
+      mycontext['stoplock'].release()
+      # Send comment to every vessel excepts the leader
+      for vessel in vessels:
+        sendMessage(vessel,send_message)
+    # Add comment to global value which contatins the post messages
+    mycontext['print_string'] = mycontext['print_string'] +'<br>'+ send_message
+      
+
+if callfunc == 'initialize':
+#declaration and initiation of global variables
+  mycontext['print_string']=""
+  mycontext['leader_ip']=""
+  mycontext['leader_id']=""
+  # get vessel's ip
+  mycontext['myip']=getmyip()
+  # generate my id randomly
+  mycontext['myid']=int(randomfloat()*1000)
+  # list of the ip address of all the vessels
+  mycontext['vessels']=['192.91.235.230','137.132.80.106','108.58.13.206','170.140.119.70','204.8.155.226','156.17.10.51','193.196.39.10','194.254.215.11'] #'134.121.64.4'
+  mycontext['stoplock'] = getlock()
+
+  if len(callargs) > 1:
+    raise Exception("Too many call arguments")
+
+  # Running remotely (assuming that we pass input argument only remotely):
+  # whenever this vessel gets a connection on its IPaddress:Clearinghouseport it'll call function board
+  elif len(callargs) == 1:
+    mycontext['port'] = int(callargs[0])
+    ip = getmyip()
+
+  # Running locally:
+  # whenever we get a connection on 127.0.0.1:12345 we'll call board
+  else:
+    mycontext['port'] = 12345
+    ip = '127.0.0.1'
+
+  listencommhandle = waitforconn(ip,mycontext['port'],board)
+  # Sleep for 5 seconds to make sure that all the vessels are ready to wait for connection
+  sleep(5)
+  # Initiate leader election
+  initiateElection()
+
+
+

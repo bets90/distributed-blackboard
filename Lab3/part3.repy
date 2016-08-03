@@ -1,0 +1,175 @@
+# -- coding: utf-8 -- 
+# send message function
+def sendMessage(ip,message):
+  mycontext['stoplock'].acquire()
+  try:
+    socketobject = openconn(ip,mycontext['port'],timeout=5)
+    socketobject.send(message)
+    socketobject.close()
+  except:
+    print 'Exception!'
+  mycontext['stoplock'].release()
+
+# response html to browser
+def htmlResponse(sockobj,content):
+  htmlresponse = """<html><head><meta content="text/html; charset=utf-8" http-equiv="content-type"><title>Blackboard GroupName</title></head><body><h2> Board Content</h2><p>Board board board board</p><h2>I've been running """+str(getruntime())+""" seconds.</h2><h2>"""+content+"""</h2><br><h3>Submit to board<h3><textarea rows="4" cols="50" name="comment" form="usrform"></textarea><form action="" id="usrform" method="post"><input type="submit"></form></body></html>"""
+  sockobj.send("HTTP/1.1 200 OK\r\nContent-type: text/html\r\n" + \
+  "Content-length: %i\r\n\r\n%s" % (len(htmlresponse), htmlresponse))
+
+# get the current sequence number
+def getCurrentSequenceNumber():
+  mycontext['stoplock'].acquire()
+  current_sequence_number = ''
+  try: # get the last sequence number
+    mycontext['log'].keys().sort()
+    current_sequence_number = int(mycontext['log'].keys()[-1])+1
+  except: # the last sequence number does not exit which means the vessel hasn't received message yet.
+    current_sequence_number = 1
+  mycontext['stoplock'].release()
+  return int(current_sequence_number)
+
+# update the local log of sequence numbers and messages
+def updateLog(comment,ip,current_sequence_number):
+  mycontext['stoplock'].acquire()
+  try: # sequence_number exists in log dictionary
+    dic=mycontext['log'][int(current_sequence_number)]
+    dic[ip]='%s'%comment
+    mycontext['log'][int(current_sequence_number)]=dic
+  except: # sequence_number does not exist in log dictionary
+    dic={}
+    dic[ip]='%s'%comment
+    mycontext['log'][int(current_sequence_number)]=dic
+  mycontext['stoplock'].release()
+
+# break the tie and reorder messages
+def reorderMessages():
+  list_of_last_address=[]
+  dic_ip_message={}
+  list_of_message=[]
+  mycontext['log'].keys().sort()
+  sequenceNumbers = mycontext['log'].keys()
+  # loop for every sequence number
+  for sequenceNumber in sequenceNumbers:
+    ips = mycontext['log'][int(sequenceNumber)]
+    # loop for every ip address of every sequence number
+    for ip in ips:
+      # put the last segment of a ip address as a key and message as a value into a new dictionary which stores every ip address and message
+      dic_ip_message[int(ip.split('.')[-1])] = ips[ip]
+      # add the last segment of a ip address into a temporary list
+      list_of_last_address.append(int(ip.split('.')[-1]))
+      # reorder the list of last segments of ip addresses
+      list_of_last_address.sort(reverse=True)
+    # put the reordered messages into a list for messages
+    for last_address in list_of_last_address:
+      list_of_message.append(dic_ip_message[last_address])
+    dic_ip_message = {}
+    del list_of_last_address[:]
+  # return the list of messages
+  return list_of_message
+# create the string of messages which is prepared to return to brower
+def printMessages(reorderMessages):
+  messages = ''
+  for message in reorderMessages:
+    messages = messages+message+'<br>'
+  return messages
+
+
+def board(ip, port, sockobj, thiscommhandle, listencommhandle):
+  try:
+    msgheader = sockobj.recv(1024) # Receive message,
+  except:
+    print 'Recv Exception!'
+  # React depending on message type: HTTP GET or POST, or some other type of communication.
+  # GET type, the vessel returns html to browser
+  if msgheader.startswith( 'GET' ):
+    # duration for becoming consistent
+    mycontext['stoplock'].acquire()
+    duration = float(mycontext['end_point']) - float(mycontext['start_point'])
+    mycontext['stoplock'].release()
+
+    htmlResponse(sockobj,str(printMessages(reorderMessages())+'<br><h3>duration for becoming consistent:'+str(duration)+'</h3>'))
+    stopcomm(thiscommhandle)
+
+  # POST type, the vessel sends the submitted message to all the vessels
+  elif msgheader.startswith( 'POST' ):
+    # record the start time of becoming consistent
+    mycontext['stoplock'].acquire()
+    mycontext['start_point'] = float(getruntime())
+    mycontext['stoplock'].release()
+    # get the comment from poster
+    comment=msgheader[msgheader.find('comment')+8:]
+    # Get the max sequence number from log and increment it by 1
+    current_sequence_number = getCurrentSequenceNumber()
+    # update Log
+    updateLog(comment,str(mycontext['myip']),current_sequence_number)
+
+    htmlResponse(sockobj,str(printMessages(reorderMessages())))
+    stopcomm(thiscommhandle)
+
+    # Send message to every vessel excepts the vessel itself
+    send_message='%s:%s:%s'%(comment,current_sequence_number,mycontext['myip'])
+    # Remove vessel's ip from vessel list
+    vessels=mycontext['vessels']
+    if mycontext['myip'] in vessels:
+      vessels.remove(mycontext['myip'])
+    for vessel in vessels:
+      sendMessage(vessel,send_message)
+
+  # Other Connection, when the vessel receives message from vessels through tcp connection ,it will add this message to its global value
+  else:
+    stopcomm(thiscommhandle)
+    # record the finish time of becoming consistent
+    mycontext['stoplock'].acquire()
+    mycontext['end_point'] = float(getruntime())
+    mycontext['stoplock'].release()
+    # get the comment from sender
+    comment=msgheader.split(':')[0]
+    # get the sender's sequence number
+    sender_sequence_number=msgheader.split(':')[1]
+    # get the sender's ip
+    sender_ip=msgheader.split(':')[2]
+    # the vessels's current sequence number is the sender's sequence number
+    current_sequence_number=int(sender_sequence_number)
+    # update the log
+    updateLog(comment,str(sender_ip),current_sequence_number)
+
+
+if callfunc == 'initialize':
+#declaration and initiation of global variables
+  # get vessel's ip
+  mycontext['myip']=getmyip()
+  # sequence number intiates to 0
+  mycontext['sequence_number']=0
+  # record the start time of becoming consistent
+  mycontext['start_point']=0
+  # record the finish time of becoming consistent
+  mycontext['end_point']=0
+  # log
+  mycontext['log']={}
+
+  # read ip addresses of all the vessels from ipAddresses.txt file
+  mycontext['vessels']=[]
+  for line in file("ipAddresses.txt","r"):
+    mycontext['vessels'].append(line.split('/')[0])
+  # get the lock
+  mycontext['stoplock'] = getlock()
+
+  if len(callargs) > 1:
+    raise Exception("Too many call arguments")
+  # Running remotely (assuming that we pass input argument only remotely):
+  # whenever this vessel gets a connection on its IPaddress:Clearinghouseport it'll call function board
+  elif len(callargs) == 1:
+    mycontext['port'] = int(callargs[0])
+    ip = getmyip()
+
+  # Running locally:
+  # whenever we get a connection on 127.0.0.1:12345 we'll call board
+  else:
+    mycontext['port'] = 12345
+    ip = '127.0.0.1'
+
+  listencommhandle = waitforconn(ip,mycontext['port'],board)
+
+
+
+

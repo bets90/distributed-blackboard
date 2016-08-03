@@ -1,0 +1,50 @@
+def board(ip, port, sockobj, thiscommhandle, listencommhandle):
+  
+  # list of the ip address of all the vessels
+  vessels=['192.91.235.230','200.19.159.35','170.140.119.70','204.8.155.226','156.17.10.51','194.254.215.11','135.109.221.103','134.121.64.4','137.148.16.10'] 
+  
+  msgheader = sockobj.recv(1024) # Receive message, 
+  # React depending on message type: HTTP GET or POST, or some other type of communication.
+  # GET type, the vessel returns html to browser
+  if msgheader.startswith( 'GET' ):
+    htmlresponse = """<html><head><meta content="text/html; charset=utf-8" http-equiv="content-type"><title>Blackboard GroupName</title></head><body><h2> Board Content</h2><p>Board board board board</p><h2>"""+mycontext['print_string']+"""</h2><br><h3>Submit to board<h3><textarea rows="4" cols="50" name="comment" form="usrform"></textarea><form action="" id="usrform" method="post"><input type="submit"></form></body></html>"""
+    sockobj.send("HTTP/1.1 200 OK\r\nContent-type: text/html\r\n" + \
+    "Content-length: %i\r\n\r\n%s" % (len(htmlresponse), htmlresponse))
+    stopcomm(thiscommhandle)
+  # POST type, the vessel sends the submitted message to all the vessels
+  elif msgheader.startswith( 'POST' ):
+    post_string=msgheader[msgheader.find('comment')+8:]
+  #send message for each and every vesselsss
+    for vessel in vessels:
+      socketobject = openconn(vessel,63155)
+      socketobject.send(post_string)
+
+    htmlresponse = """<html><head><meta content="text/html; charset=utf-8" http-equiv="content-type"><title>Blackboard GroupName</title></head><body><h2> Board Content</h2><p>Board board board board</p><h2>"""+mycontext['print_string']+"""</h2><br><h3>Submit to board<h3><textarea rows="4" cols="50" name="comment" form="usrform"></textarea><form action="" id="usrform" method="post"><input type="submit"></form></body></html>"""
+    sockobj.send("HTTP/1.1 200 OK\r\nContent-type: text/html\r\n" + \
+    "Content-length: %i\r\n\r\n%s" % (len(htmlresponse), htmlresponse))
+    stopcomm(thiscommhandle)
+
+  #Other Connection, when the vessel receives message from vessels through tcp connection ,it will add this message to its global value
+  else:
+    post_string=msgheader
+    mycontext['print_string'] = mycontext['print_string'] +'<br>'+ post_string
+    stopcomm(thiscommhandle)
+
+if callfunc == 'initialize':
+  mycontext['print_string']=""
+  if len(callargs) > 1:
+    raise Exception("Too many call arguments")
+
+  # Running remotely (assuming that we pass input argument only remotely):
+  # whenever this vessel gets a connection on its IPaddress:Clearinghouseport it'll call function board
+  elif len(callargs) == 1:
+    port = int(callargs[0])
+    ip = getmyip()
+
+  # Running locally:
+  # whenever we get a connection on 127.0.0.1:12345 we'll call board
+  else:
+    port = 12345
+    ip = '127.0.0.1'
+  
+  listencommhandle = waitforconn(ip,port,board)
